@@ -6,22 +6,23 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import ReactCrop, { type Crop, type PixelCrop } from 'react-image-crop';
-import { generateEditedImage, generateFilteredImage, generateAdjustedImage, generateFixedImage } from './services/geminiService';
+import { generateEditedImage, generateFilteredImage, generateAdjustedImage, generateFixedImage, generateRedrawnImage } from './services/geminiService';
 import Header from './components/Header';
 import Spinner from './components/Spinner';
 import FilterPanel from './components/FilterPanel';
 import AdjustmentPanel from './components/AdjustmentPanel';
 import CropPanel from './components/CropPanel';
 import FixPanel from './components/FixPanel';
+import RedrawPanel from './components/RedrawPanel';
 import { UndoIcon, RedoIcon, EyeIcon } from './components/icons';
 import StartScreen from './components/StartScreen';
 
 // Helper to convert a data URL string to a File object
 const dataURLtoFile = (dataurl: string, filename: string): File => {
     const arr = dataurl.split(',');
-    if (arr.length < 2) throw new Error("Invalid data URL");
+    if (arr.length < 2) throw new Error("无效的数据 URL");
     const mimeMatch = arr[0].match(/:(.*?);/);
-    if (!mimeMatch || !mimeMatch[1]) throw new Error("Could not parse MIME type from data URL");
+    if (!mimeMatch || !mimeMatch[1]) throw new Error("无法从数据 URL 解析 MIME 类型");
 
     const mime = mimeMatch[1];
     const bstr = atob(arr[1]);
@@ -33,7 +34,16 @@ const dataURLtoFile = (dataurl: string, filename: string): File => {
     return new File([u8arr], filename, {type:mime});
 }
 
-type Tab = 'retouch' | 'fix' | 'adjust' | 'filters' | 'crop';
+type Tab = 'retouch' | 'fix' | 'adjust' | 'filters' | 'crop' | 'redraw';
+
+const tabLabels: Record<Tab, string> = {
+  retouch: '修饰',
+  fix: '修复',
+  adjust: '调整',
+  filters: '滤镜',
+  crop: '裁剪',
+  redraw: '重绘',
+};
 
 const App: React.FC = () => {
   const [history, setHistory] = useState<File[]>([]);
@@ -106,17 +116,17 @@ const App: React.FC = () => {
 
   const handleGenerate = useCallback(async () => {
     if (!currentImage) {
-      setError('No image loaded to edit.');
+      setError('没有加载要编辑的图像。');
       return;
     }
     
     if (!prompt.trim()) {
-        setError('Please enter a description for your edit.');
+        setError('请输入您的编辑描述。');
         return;
     }
 
     if (!editHotspot) {
-        setError('Please click on the image to select an area to edit.');
+        setError('请在图像上单击以选择要编辑的区域。');
         return;
     }
 
@@ -130,8 +140,8 @@ const App: React.FC = () => {
         setEditHotspot(null);
         setDisplayHotspot(null);
     } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-        setError(`Failed to generate the image. ${errorMessage}`);
+        const errorMessage = err instanceof Error ? err.message : '发生未知错误。';
+        setError(`生成图像失败。 ${errorMessage}`);
         console.error(err);
     } finally {
         setIsLoading(false);
@@ -140,7 +150,7 @@ const App: React.FC = () => {
   
   const handleApplyFilter = useCallback(async (filterPrompt: string) => {
     if (!currentImage) {
-      setError('No image loaded to apply a filter to.');
+      setError('没有加载要应用滤镜的图像。');
       return;
     }
     
@@ -152,8 +162,8 @@ const App: React.FC = () => {
         const newImageFile = dataURLtoFile(filteredImageUrl, `filtered-${Date.now()}.png`);
         addImageToHistory(newImageFile);
     } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-        setError(`Failed to apply the filter. ${errorMessage}`);
+        const errorMessage = err instanceof Error ? err.message : '发生未知错误。';
+        setError(`应用滤镜失败。 ${errorMessage}`);
         console.error(err);
     } finally {
         setIsLoading(false);
@@ -162,7 +172,7 @@ const App: React.FC = () => {
 
   const handleApplyFix = useCallback(async (fixPrompt: string) => {
     if (!currentImage) {
-      setError('No image loaded to apply a fix to.');
+      setError('没有加载要修复的图像。');
       return;
     }
     
@@ -174,8 +184,8 @@ const App: React.FC = () => {
         const newImageFile = dataURLtoFile(fixedImageUrl, `fixed-${Date.now()}.png`);
         addImageToHistory(newImageFile);
     } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-        setError(`Failed to apply the fix. ${errorMessage}`);
+        const errorMessage = err instanceof Error ? err.message : '发生未知错误。';
+        setError(`应用修复失败。 ${errorMessage}`);
         console.error(err);
     } finally {
         setIsLoading(false);
@@ -184,7 +194,7 @@ const App: React.FC = () => {
   
   const handleApplyAdjustment = useCallback(async (adjustmentPrompt: string) => {
     if (!currentImage) {
-      setError('No image loaded to apply an adjustment to.');
+      setError('没有加载要应用调整的图像。');
       return;
     }
     
@@ -196,8 +206,30 @@ const App: React.FC = () => {
         const newImageFile = dataURLtoFile(adjustedImageUrl, `adjusted-${Date.now()}.png`);
         addImageToHistory(newImageFile);
     } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-        setError(`Failed to apply the adjustment. ${errorMessage}`);
+        const errorMessage = err instanceof Error ? err.message : '发生未知错误。';
+        setError(`应用调整失败。 ${errorMessage}`);
+        console.error(err);
+    } finally {
+        setIsLoading(false);
+    }
+  }, [currentImage, addImageToHistory]);
+
+  const handleApplyRedraw = useCallback(async (redrawPrompt: string) => {
+    if (!currentImage) {
+      setError('没有加载要重绘的图像。');
+      return;
+    }
+    
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+        const redrawnImageUrl = await generateRedrawnImage(currentImage, redrawPrompt);
+        const newImageFile = dataURLtoFile(redrawnImageUrl, `redrawn-${Date.now()}.png`);
+        addImageToHistory(newImageFile);
+    } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : '发生未知错误。';
+        setError(`重绘失败。 ${errorMessage}`);
         console.error(err);
     } finally {
         setIsLoading(false);
@@ -206,7 +238,7 @@ const App: React.FC = () => {
 
   const handleApplyCrop = useCallback(() => {
     if (!completedCrop || !imgRef.current) {
-        setError('Please select an area to crop.');
+        setError('请选择要裁剪的区域。');
         return;
     }
 
@@ -220,7 +252,7 @@ const App: React.FC = () => {
     const ctx = canvas.getContext('2d');
 
     if (!ctx) {
-        setError('Could not process the crop.');
+        setError('无法处理裁剪。');
         return;
     }
 
@@ -325,13 +357,13 @@ const App: React.FC = () => {
     if (error) {
        return (
            <div className="text-center animate-fade-in bg-red-500/10 border border-red-500/20 p-8 rounded-lg max-w-2xl mx-auto flex flex-col items-center gap-4">
-            <h2 className="text-2xl font-bold text-red-300">An Error Occurred</h2>
+            <h2 className="text-2xl font-bold text-red-300">发生错误</h2>
             <p className="text-md text-red-400">{error}</p>
             <button
                 onClick={() => setError(null)}
                 className="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-6 rounded-lg text-md transition-colors"
               >
-                Try Again
+                再试一次
             </button>
           </div>
         );
@@ -348,7 +380,7 @@ const App: React.FC = () => {
             <img
                 key={originalImageUrl}
                 src={originalImageUrl}
-                alt="Original"
+                alt="原图"
                 className="w-full h-auto object-contain max-h-[60vh] rounded-xl pointer-events-none"
             />
         )}
@@ -357,7 +389,7 @@ const App: React.FC = () => {
             ref={imgRef}
             key={currentImageUrl}
             src={currentImageUrl}
-            alt="Current"
+            alt="当前图像"
             onClick={handleImageClick}
             className={`absolute top-0 left-0 w-full h-auto object-contain max-h-[60vh] rounded-xl transition-opacity duration-200 ease-in-out ${isComparing ? 'opacity-0' : 'opacity-100'} ${activeTab === 'retouch' ? 'cursor-crosshair' : ''}`}
         />
@@ -370,7 +402,7 @@ const App: React.FC = () => {
         ref={imgRef}
         key={`crop-${currentImageUrl}`}
         src={currentImageUrl} 
-        alt="Crop this image"
+        alt="裁剪此图像"
         className="w-full h-auto object-contain max-h-[60vh] rounded-xl"
       />
     );
@@ -382,7 +414,7 @@ const App: React.FC = () => {
             {isLoading && (
                 <div className="absolute inset-0 bg-black/70 z-30 flex flex-col items-center justify-center gap-4 animate-fade-in">
                     <Spinner />
-                    <p className="text-gray-300">AI is working its magic...</p>
+                    <p className="text-gray-300">AI 正在施展魔法...</p>
                 </div>
             )}
             
@@ -409,17 +441,17 @@ const App: React.FC = () => {
         </div>
         
         <div className="w-full bg-gray-800/80 border border-gray-700/80 rounded-lg p-2 flex items-center justify-center gap-2 backdrop-blur-sm">
-            {(['retouch', 'fix', 'crop', 'adjust', 'filters'] as Tab[]).map(tab => (
+            {(['retouch', 'fix', 'crop', 'redraw', 'adjust', 'filters'] as Tab[]).map(tab => (
                  <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
-                    className={`w-full capitalize font-semibold py-3 px-5 rounded-md transition-all duration-200 text-base ${
+                    className={`w-full font-semibold py-3 px-5 rounded-md transition-all duration-200 text-base ${
                         activeTab === tab 
                         ? 'bg-gradient-to-br from-blue-500 to-cyan-400 text-white shadow-lg shadow-cyan-500/40' 
                         : 'text-gray-300 hover:text-white hover:bg-white/10'
                     }`}
                 >
-                    {tab}
+                    {tabLabels[tab]}
                 </button>
             ))}
         </div>
@@ -428,14 +460,14 @@ const App: React.FC = () => {
             {activeTab === 'retouch' && (
                 <div className="flex flex-col items-center gap-4">
                     <p className="text-md text-gray-400">
-                        {editHotspot ? 'Great! Now describe your localized edit below.' : 'Click an area on the image to make a precise edit.'}
+                        {editHotspot ? '很好！现在在下面描述您的局部编辑。' : '在图像上单击一个区域以进行精确编辑。'}
                     </p>
                     <form onSubmit={(e) => { e.preventDefault(); handleGenerate(); }} className="w-full flex items-center gap-2">
                         <input
                             type="text"
                             value={prompt}
                             onChange={(e) => setPrompt(e.target.value)}
-                            placeholder={editHotspot ? "e.g., 'change my shirt color to blue'" : "First click a point on the image"}
+                            placeholder={editHotspot ? "例如，“把我的衬衫颜色改成蓝色”" : "首先在图像上单击一个点"}
                             className="flex-grow bg-gray-800 border border-gray-700 text-gray-200 rounded-lg p-5 text-lg focus:ring-2 focus:ring-blue-500 focus:outline-none transition w-full disabled:cursor-not-allowed disabled:opacity-60"
                             disabled={isLoading || !editHotspot}
                         />
@@ -444,13 +476,14 @@ const App: React.FC = () => {
                             className="bg-gradient-to-br from-blue-600 to-blue-500 text-white font-bold py-5 px-8 text-lg rounded-lg transition-all duration-300 ease-in-out shadow-lg shadow-blue-500/20 hover:shadow-xl hover:shadow-blue-500/40 hover:-translate-y-px active:scale-95 active:shadow-inner disabled:from-blue-800 disabled:to-blue-700 disabled:shadow-none disabled:cursor-not-allowed disabled:transform-none"
                             disabled={isLoading || !prompt.trim() || !editHotspot}
                         >
-                            Generate
+                            生成
                         </button>
                     </form>
                 </div>
             )}
             {activeTab === 'fix' && <FixPanel onApplyFix={handleApplyFix} isLoading={isLoading} />}
             {activeTab === 'crop' && <CropPanel onApplyCrop={handleApplyCrop} onSetAspect={setAspect} isLoading={isLoading} isCropping={!!completedCrop?.width && completedCrop.width > 0} />}
+            {activeTab === 'redraw' && <RedrawPanel onApplyRedraw={handleApplyRedraw} isLoading={isLoading} />}
             {activeTab === 'adjust' && <AdjustmentPanel onApplyAdjustment={handleApplyAdjustment} isLoading={isLoading} />}
             {activeTab === 'filters' && <FilterPanel onApplyFilter={handleApplyFilter} isLoading={isLoading} />}
         </div>
@@ -460,19 +493,19 @@ const App: React.FC = () => {
                 onClick={handleUndo}
                 disabled={!canUndo}
                 className="flex items-center justify-center text-center bg-white/10 border border-white/20 text-gray-200 font-semibold py-3 px-5 rounded-md transition-all duration-200 ease-in-out hover:bg-white/20 hover:border-white/30 active:scale-95 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-white/5"
-                aria-label="Undo last action"
+                aria-label="撤销上一步操作"
             >
                 <UndoIcon className="w-5 h-5 mr-2" />
-                Undo
+                撤销
             </button>
             <button 
                 onClick={handleRedo}
                 disabled={!canRedo}
                 className="flex items-center justify-center text-center bg-white/10 border border-white/20 text-gray-200 font-semibold py-3 px-5 rounded-md transition-all duration-200 ease-in-out hover:bg-white/20 hover:border-white/30 active:scale-95 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-white/5"
-                aria-label="Redo last action"
+                aria-label="重做上一步操作"
             >
                 <RedoIcon className="w-5 h-5 mr-2" />
-                Redo
+                重做
             </button>
             
             <div className="h-6 w-px bg-gray-600 mx-1 hidden sm:block"></div>
@@ -485,10 +518,10 @@ const App: React.FC = () => {
                   onTouchStart={() => setIsComparing(true)}
                   onTouchEnd={() => setIsComparing(false)}
                   className="flex items-center justify-center text-center bg-white/10 border border-white/20 text-gray-200 font-semibold py-3 px-5 rounded-md transition-all duration-200 ease-in-out hover:bg-white/20 hover:border-white/30 active:scale-95 text-base"
-                  aria-label="Press and hold to see original image"
+                  aria-label="按住查看原图"
               >
                   <EyeIcon className="w-5 h-5 mr-2" />
-                  Compare
+                  对比
               </button>
             )}
 
@@ -497,20 +530,20 @@ const App: React.FC = () => {
                 disabled={!canUndo}
                 className="text-center bg-transparent border border-white/20 text-gray-200 font-semibold py-3 px-5 rounded-md transition-all duration-200 ease-in-out hover:bg-white/10 hover:border-white/30 active:scale-95 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-transparent"
               >
-                Reset
+                重置
             </button>
             <button 
                 onClick={handleUploadNew}
                 className="text-center bg-white/10 border border-white/20 text-gray-200 font-semibold py-3 px-5 rounded-md transition-all duration-200 ease-in-out hover:bg-white/20 hover:border-white/30 active:scale-95 text-base"
             >
-                Upload New
+                上传新图片
             </button>
 
             <button 
                 onClick={handleDownload}
                 className="flex-grow sm:flex-grow-0 ml-auto bg-gradient-to-br from-green-600 to-green-500 text-white font-bold py-3 px-5 rounded-md transition-all duration-300 ease-in-out shadow-lg shadow-green-500/20 hover:shadow-xl hover:shadow-green-500/40 hover:-translate-y-px active:scale-95 active:shadow-inner text-base"
             >
-                Download Image
+                下载图片
             </button>
         </div>
       </div>
